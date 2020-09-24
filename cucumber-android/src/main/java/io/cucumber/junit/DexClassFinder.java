@@ -1,23 +1,29 @@
 package io.cucumber.junit;
 
+import android.content.pm.PackageManager;
+import android.util.Log;
+
+import org.jetbrains.annotations.NotNull;
+
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Enumeration;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import cucumber.runtime.ClassFinder;
-import dalvik.system.DexFile;
+import cucumber.runtime.CucumberException;
 import io.cucumber.core.model.Classpath;
 
 /**
- * Android specific implementation of {@link ClassFinder} which loads classes contained in the provided {@link DexFile}.
+ * Android specific implementation of {@link ClassFinder} which loads classes contained in the provided
  */
 final class DexClassFinder implements ClassFinder {
+    private static final String TAG = "DexClassFinder";
 
     /**
+     * MultiDexClassFinderTest
      * Symbol name of the manifest class.
      */
     private static final String MANIFEST_CLASS_NAME = "Manifest";
@@ -38,55 +44,53 @@ final class DexClassFinder implements ClassFinder {
     private static final String FILE_NAME_SEPARATOR = ".";
 
     /**
-     * The class loader to actually load the classes specified by the {@link DexFile}.
-     */
-    private static final ClassLoader CLASS_LOADER = DexClassFinder.class.getClassLoader();
-
-    /**
      * The "symbol" representing the default package.
      */
     private static final String DEFAULT_PACKAGE = "";
     private static final Pattern PATH_SEPARATOR_PATTERN = Pattern.compile("/", Pattern.LITERAL);
-    /**
-     * The {@link DexFile} to load classes from
-     */
-    private final DexFile dexFile;
 
-    /**
-     * Creates a new instance for the given parameter.
-     *
-     * @param dexFile the {@link DexFile} to load classes from
-     */
-    DexClassFinder(final DexFile dexFile) {
-        this.dexFile = dexFile;
+    private final AndroidMultiDexSingleClassLoader classLoader;
+    private final AndroidMultiDexAllClassesLoader classesLoader;
+
+    public DexClassFinder(@NotNull AndroidMultiDexSingleClassLoader classLoader,
+                          @NotNull AndroidMultiDexAllClassesLoader multiDexSizeRetriever) {
+        this.classLoader = classLoader;
+        this.classesLoader = multiDexSizeRetriever;
     }
 
     @Override
     public <T> Collection<Class<? extends T>> getDescendants(final Class<T> parentType, final URI packageName) {
-        final List<Class<? extends T>> result = new ArrayList<Class<? extends T>>();
+        final List<Class<? extends T>> result = new ArrayList<>();
+
         String packageNameString = PATH_SEPARATOR_PATTERN.matcher(Classpath.resourceName(packageName)).replaceAll(Matcher.quoteReplacement("."));
-        final Enumeration<String> entries = dexFile.entries();
-        while (entries.hasMoreElements()) {
-            final String className = entries.nextElement();
-            if (isInPackage(className, packageNameString) && !isGenerated(className)) {
-                try {
-                    final Class<? extends T> clazz = loadClass(className);
-                    if (!parentType.equals(clazz) && parentType.isAssignableFrom(clazz) && canGetMethods(clazz)) {
-                        result.add(clazz.asSubclass(parentType));
+        try {
+            List<String> allClasses = classesLoader.loadAllClasses();
+            for (String className : allClasses) {
+                if (isInPackage(className, packageNameString) && !isGenerated(className)) {
+                    try {
+                        final Class<? extends T> clazz = loadClass(className);
+                        if (!parentType.equals(clazz) && parentType.isAssignableFrom(clazz) && canGetMethods(clazz)) {
+                            result.add(clazz.asSubclass(parentType));
+                        }
+                    } catch (ClassNotFoundException e) {
+                        // Ignore, class cannot be loaded - same as in ResourceLoaderClassFinder.
+                        Log.w(TAG, e);
+                    } catch (NoClassDefFoundError ex) {
+                        // Ignore, class cannot be loaded - same as in ResourceLoaderClassFinder.
+                        Log.w(TAG, ex);
                     }
-                } catch (ClassNotFoundException ignored) {
-                    //ignore, class cannot be loaded - same as in ResourceLoaderClassFinder
-                } catch (NoClassDefFoundError ignored){
-                    //ignore, class cannot be loaded - same as in ResourceLoaderClassFinder
                 }
             }
+        } catch (PackageManager.NameNotFoundException e) {
+            throw new CucumberException("Can not find the package by the name" + e.getMessage());
         }
+
         return result;
     }
 
     @Override
     public <T> Class<? extends T> loadClass(final String className) throws ClassNotFoundException {
-        return (Class<? extends T>) Class.forName(className, false, CLASS_LOADER);
+        return classLoader.loadClass(className);
     }
 
     private boolean isInPackage(final String className, final String packageName) {
@@ -115,7 +119,7 @@ final class DexClassFinder implements ClassFinder {
     private static boolean canGetMethods(Class<?> clazz) {
         try {
             clazz.getMethods();
-        } catch (NoClassDefFoundError ignored){
+        } catch (NoClassDefFoundError ignored) {
             return false;
         }
         return true;

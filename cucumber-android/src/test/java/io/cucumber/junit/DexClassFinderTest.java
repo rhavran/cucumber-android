@@ -1,50 +1,61 @@
 package io.cucumber.junit;
 
+import android.content.pm.PackageManager;
+
 import com.google.common.collect.Lists;
 
-import org.hamcrest.Matcher;
 import org.hamcrest.collection.IsIterableContainingInOrder;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.RobolectricTestRunner;
-import org.robolectric.annotation.Config;
+import org.junit.runners.JUnit4;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
-import java.io.IOException;
-import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 
-import dalvik.system.DexFile;
+import cucumber.runtime.ClassFinder;
 import io.cucumber.core.model.GluePath;
-import io.cucumber.junit.shadow.ShadowDexFile;
 import io.cucumber.junit.stub.unwanted.SomeUnwantedClass;
 import io.cucumber.junit.stub.wanted.Manifest;
 import io.cucumber.junit.stub.wanted.R;
 import io.cucumber.junit.stub.wanted.SomeClass;
 import io.cucumber.junit.stub.wanted.SomeKotlinClass;
 
+import static io.cucumber.junit.matchers.CucumberMatchers.containsOnly;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.when;
 
-@RunWith(RobolectricTestRunner.class)
-@Config(shadows = {ShadowDexFile.class}, manifest = Config.NONE)
+@RunWith(JUnit4.class)
 public class DexClassFinderTest {
 
-    private DexFile dexFile;
-    private DexClassFinder dexClassFinder;
+    @Rule
+    public MockitoRule mockitoRule = MockitoJUnit.rule();
+
+    @Mock
+    private AndroidMultiDexAllClassesLoader androidMultiDexAllClassesLoader;
+
+    @Mock
+    private AndroidMultiDexSingleClassLoader androidMultiDexSingleClassLoader;
+
+    private ClassFinder dexClassFinder;
 
     @Before
-    public void beforeEachTest() throws IOException {
-        dexFile = new DexFile("notImportant");
-        dexClassFinder = new DexClassFinder(dexFile);
+    public void beforeEachTest() {
+        dexClassFinder = new DexClassFinder(androidMultiDexSingleClassLoader, androidMultiDexAllClassesLoader);
     }
 
     @Test
-    public void only_loads_classes_from_specified_package() throws Exception {
+    public void only_loads_classes_from_specified_package() {
 
         // given
-        setDexFileEntries(SomeClass.class, SomeKotlinClass.class, SomeUnwantedClass.class);
+        mockAllClassesResults(SomeClass.class, SomeKotlinClass.class, SomeUnwantedClass.class);
 
         // when
         final Collection<Class<?>> descendants = getDescendants(Object.class, SomeClass.class.getPackage());
@@ -53,16 +64,11 @@ public class DexClassFinderTest {
         assertThat(descendants, IsIterableContainingInOrder.<Class<?>>contains(SomeClass.class, SomeKotlinClass.class));
     }
 
-    private <T> Collection<Class<? extends T>> getDescendants(Class<T> parentType, Package javaPackage)
-    {
-        return dexClassFinder.getDescendants(parentType, GluePath.parse(javaPackage.getName()));
-    }
-
     @Test
-    public void does_not_load_manifest_class() throws Exception {
+    public void does_not_load_manifest_class() {
 
         // given
-        setDexFileEntries(SomeClass.class, Manifest.class);
+        mockAllClassesResults(SomeClass.class, Manifest.class);
 
         // when
         final Collection<Class<?>> descendants = getDescendants(Object.class, SomeClass.class.getPackage());
@@ -72,10 +78,10 @@ public class DexClassFinderTest {
     }
 
     @Test
-    public void does_not_load_R_class() throws Exception {
+    public void does_not_load_R_class() {
 
         // given
-        setDexFileEntries(SomeClass.class, R.class);
+        mockAllClassesResults(SomeClass.class, R.class);
 
         // when
         final Collection<Class<?>> descendants = getDescendants(Object.class, SomeClass.class.getPackage());
@@ -85,10 +91,10 @@ public class DexClassFinderTest {
     }
 
     @Test
-    public void does_not_load_R_inner_class() throws Exception {
+    public void does_not_load_R_inner_class() {
 
         // given
-        setDexFileEntries(SomeClass.class, R.SomeInnerClass.class);
+        mockAllClassesResults(SomeClass.class, R.SomeInnerClass.class);
 
         // when
         final Collection<Class<?>> descendants = getDescendants(Object.class, SomeClass.class.getPackage());
@@ -98,30 +104,28 @@ public class DexClassFinderTest {
     }
 
     @Test
-    public void only_loads_class_which_is_not_the_parent_type() throws Exception {
+    public void only_loads_class_which_is_not_the_parent_type() {
 
         // given
-        setDexFileEntries(Integer.class, Number.class);
+        mockAllClassesResults(Integer.class, Number.class);
 
         // when
         final Class parentType = Number.class;
-        @SuppressWarnings("unchecked")
-        final Collection<Class<?>> descendants = getDescendants(parentType, Object.class.getPackage());
+        @SuppressWarnings("unchecked") final Collection<Class<?>> descendants = getDescendants(parentType, Object.class.getPackage());
 
         // then
         assertThat(descendants, containsOnly(Integer.class));
     }
 
     @Test
-    public void only_loads_class_which_is_assignable_to_parent_type() throws Exception {
+    public void only_loads_class_which_is_assignable_to_parent_type() {
 
         // given
-        setDexFileEntries(Integer.class, String.class);
+        mockAllClassesResults(Integer.class, String.class);
 
         // when
         final Class parentType = Number.class;
-        @SuppressWarnings("unchecked")
-        final Collection<Class<?>> descendants = getDescendants(parentType, Object.class.getPackage());
+        @SuppressWarnings("unchecked") final Collection<Class<?>> descendants = getDescendants(parentType, Object.class.getPackage());
 
         // then
         assertThat(descendants, containsOnly(Integer.class));
@@ -131,7 +135,7 @@ public class DexClassFinderTest {
     public void does_not_load_kotlin_inlined_classes() throws Exception {
         // given
         Class<?> kotlinInlinedFunClass = Class.forName("io.cucumber.junit.stub.wanted.SomeKotlinClass$someFun$$inlined$sortedBy$1");
-        setDexFileEntries(SomeClass.class, kotlinInlinedFunClass);
+        mockAllClassesResults(SomeClass.class, kotlinInlinedFunClass);
 
         // when
         final Collection<Class<?>> descendants = getDescendants(Object.class, SomeClass.class.getPackage());
@@ -143,7 +147,7 @@ public class DexClassFinderTest {
     @Test
     public void does_not_throw_exception_if_class_not_found() throws Exception {
         // given
-        setDexFileEntries(Arrays.asList(SomeClass.class.getName(),"SomeNotExistentClass"));
+        mockAllClassesResults(Arrays.asList(SomeClass.class.getName(), "SomeNotExistentClass"));
 
         // when
         final Collection<Class<?>> descendants = getDescendants(Object.class, SomeClass.class.getPackage());
@@ -152,27 +156,39 @@ public class DexClassFinderTest {
         assertThat(descendants, containsOnly(SomeClass.class));
     }
 
-    private Matcher<Iterable<? extends Class<?>>> containsOnly(final Class<?> type) {
-        return IsIterableContainingInOrder.<Class<?>>contains(type);
+    private void mockAllClassesResults(final Class... entryClasses) {
+        mockAllClassesResults(classToName(entryClasses));
     }
 
-    private void setDexFileEntries(final Class... entryClasses) throws NoSuchFieldException, IllegalAccessException {
-        Collection<String> entries = classToName(entryClasses);
-        setDexFileEntries(entries);
+    private void mockAllClassesResults(List<String> entries) {
+        try {
+            when(androidMultiDexAllClassesLoader.loadAllClasses()).thenReturn(entries);
+        } catch (PackageManager.NameNotFoundException e) {
+            e.printStackTrace();
+        }
+        for (String cl : entries) {
+            try {
+                doReturn(fromName(cl)).when(androidMultiDexSingleClassLoader).loadClass(eq(cl));
+            } catch (ClassNotFoundException e) {
+                e.printStackTrace();
+            }
+        }
     }
 
-    private void setDexFileEntries(Collection<String> entries) throws NoSuchFieldException, IllegalAccessException {
-        final Field roboData = DexFile.class.getDeclaredField("__robo_data__");
-        final ShadowDexFile shadowDexFile = (ShadowDexFile) roboData.get(dexFile);
-        shadowDexFile.setEntries(entries);
+    public <T> Class<? extends T> fromName(String name) throws ClassNotFoundException {
+        return (Class<? extends T>) Class.forName(name);
     }
 
-    private Collection<String> classToName(final Class... entryClasses) {
+    private List<String> classToName(final Class... entryClasses) {
         final List<String> names = Lists.newArrayList();
         for (final Class entryClass : entryClasses) {
             names.add(entryClass.getName());
         }
 
         return names;
+    }
+
+    private <T> Collection<Class<? extends T>> getDescendants(Class<T> parentType, Package javaPackage) {
+        return dexClassFinder.getDescendants(parentType, GluePath.parse(javaPackage.getName()));
     }
 }

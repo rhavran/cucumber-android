@@ -14,7 +14,6 @@ import org.junit.runners.ParentRunner;
 import org.junit.runners.model.InitializationError;
 import org.junit.runners.model.Statement;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -28,7 +27,6 @@ import cucumber.runner.ThreadLocalRunnerSupplier;
 import cucumber.runner.TimeService;
 import cucumber.runner.TimeServiceEventBus;
 import cucumber.runtime.ClassFinder;
-import cucumber.runtime.CucumberException;
 import cucumber.runtime.FeaturePathFeatureSupplier;
 import cucumber.runtime.FeatureSupplier;
 import cucumber.runtime.UndefinedStepsTracker;
@@ -40,7 +38,6 @@ import cucumber.runtime.formatter.Stats;
 import cucumber.runtime.java.AndroidJavaBackendFactory;
 import cucumber.runtime.model.CucumberFeature;
 import cucumber.runtime.model.FeatureLoader;
-import dalvik.system.DexFile;
 import gherkin.ast.Examples;
 import gherkin.ast.Feature;
 import gherkin.ast.ScenarioDefinition;
@@ -79,7 +76,10 @@ public class CucumberJUnitRunner extends ParentRunner<AndroidFeatureRunner> impl
         trySetCucumberOptionsToSystemProperties(arguments);
         Context context = instrumentation.getContext();
         ClassLoader classLoader = context.getClassLoader();
-        ClassFinder classFinder = createDexClassFinder(context);
+        ClassFinder classFinder = new DexClassFinder(
+                new AndroidMultiDexSingleClassLoader(context, classLoader),
+                new AndroidMultiDexAllClassesLoader(context, new AndroidMultiDexFilesNumberRetriever(context))
+        );
         AndroidJunitRuntimeOptionsFactory.Options options = AndroidJunitRuntimeOptionsFactory.createRuntimeOptions(context, classFinder, classLoader);
 
         bus = new TimeServiceEventBus(TimeService.SYSTEM);
@@ -265,19 +265,6 @@ public class CucumberJUnitRunner extends ParentRunner<AndroidFeatureRunner> impl
         if (!cucumberOptions.isEmpty()) {
             Log.d(TAG, "Setting cucumber.options from arguments: '" + cucumberOptions + "'");
             System.setProperty(CUCUMBER_OPTIONS_SYSTEM_PROPERTY, cucumberOptions);
-        }
-    }
-
-    private static ClassFinder createDexClassFinder(final Context context) {
-        final String apkPath = context.getPackageCodePath();
-        return new DexClassFinder(newDexFile(apkPath));
-    }
-
-    private static DexFile newDexFile(final String apkPath) {
-        try {
-            return new DexFile(apkPath);
-        } catch (final IOException e) {
-            throw new CucumberException("Failed to open " + apkPath);
         }
     }
 
